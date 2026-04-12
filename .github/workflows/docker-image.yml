@@ -1,0 +1,67 @@
+name: Build Docker Image Multi Account
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare accounts
+        run: |
+          printf "%s" "${{ secrets.DOCKER_ACCOUNTS }}" > accounts.txt
+
+      - name: Build base image
+        run: |
+          docker build -t temp-image:latest .
+
+      - name: Push per account (isolated)
+        run: |
+          set -e
+
+          > results.txt
+
+          while IFS=: read -r USERNAME PASSWORD || [ -n "$USERNAME" ]
+          do
+            [ -z "$USERNAME" ] && continue
+
+            REPO=$(tr -dc a-z0-9 </dev/urandom | head -c8)
+            FULL="$USERNAME/$REPO:latest"
+
+            echo "🚀 Pushing $FULL"
+
+            # ===== ISOLATE DOCKER CONFIG =====
+            export DOCKER_CONFIG=/tmp/docker-$USERNAME
+            mkdir -p $DOCKER_CONFIG
+
+            echo "$PASSWORD" | docker login -u "$USERNAME" --password-stdin
+
+            # ===== FORCE UNIQUE IMAGE =====
+            echo "$RANDOM-$RANDOM-$(date +%s%N)" > random.txt
+
+            echo "FROM temp-image:latest" > Dockerfile.temp
+            echo "COPY random.txt /random.txt" >> Dockerfile.temp
+
+            docker build -f Dockerfile.temp -t "$FULL" .
+
+            docker push "$FULL"
+
+            echo "https://hub.docker.com/r/$USERNAME/$REPO" >> results.txt
+
+            # cleanup config biar bener-bener fresh
+            rm -rf $DOCKER_CONFIG
+
+            sleep 2
+
+          done < accounts.txt
+
+      - name: Show results
+        run: |
+          echo "==== RESULT LIST ===="
+          cat results.txt
